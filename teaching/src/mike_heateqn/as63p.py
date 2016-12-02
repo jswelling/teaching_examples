@@ -4,6 +4,21 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
+"""
+This is a Python implementation of the AS63 code.
+
+Good things to google:
+  -try 'matplotlib 3d' and specifically http://matplotlib.org/mpl_toolkits/mplot3d/tutorial.html#surface-plots
+   for information on the 3d surface plot.
+  -try 'matplotlib imshow' and specifically http://matplotlib.org/api/pyplot_api.html#matplotlib.pyplot.imshow
+   for information on the function that draws a matrix as an image.
+  -There are several ways to do animation in matplotlib.  Google 'matplotlib animation' for examples.  This
+   code is a synthesis of several examples; I'm afraid I can't find a reference that looks quite like it.
+  -Google 'numpy fortran to python' for information on using ftopy.  The best specific page is 
+   https://docs.scipy.org/doc/numpy-1.10.0/user/c-info.python-as-glue.html
+"""
+
+
 XDIM = 20
 YDIM = 30
 
@@ -28,8 +43,9 @@ def update(gMat):  #MJL: do one time step + 5 relaxations
                 gNew[i,j]= (gMat[i,j]+c1*(gNew[i+1,j]+gNew[i-1,j]+gNew[i,j+1]+gNew[i,j-1]))/c2
                 
     # Why not use this much more concise version?  How could you fix it?
-#     gNew[1:-1, 1:-1] = gMat[1:-1, 1:-1] + c1*(gNew[2:, 1:-1] + gNew[0:-2, 1:-1]
-#                                               + gNew[1:-1, 2:] + gNew[1:-1, 0:-2])/c2
+#     for _ in range(0, 5):
+#         gNew[1:-1, 1:-1] = gMat[1:-1, 1:-1] + c1*(gNew[2:, 1:-1] + gNew[0:-2, 1:-1]
+#                                                   + gNew[1:-1, 2:] + gNew[1:-1, 0:-2])/c2
     
     return gNew
 
