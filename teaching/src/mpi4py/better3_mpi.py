@@ -49,17 +49,46 @@ def sendGhosts(gFull, ghostLow, ghostHigh, rank, comm):
 def recvGhosts(gFull, ghostLow, ghostHigh, rank, comm):
     if ghostLow:
         lowRcvReq = comm.Irecv(gFull[0,:],rank-1, 8)
-        lowRcvReq.wait()
+        lowRcvReq.Wait()
     if ghostHigh:
         highRcvReq = comm.Irecv(gFull[-1,:], rank+1, 7)
-        highRcvReq.wait()
+        highRcvReq.Wait()
 
 def waitGhosts(ghostLow, ghostHigh, lowReq, highReq):
     if ghostLow:
-        lowReq.wait()
+        lowReq.Wait()
     if ghostHigh:
-        highReq.wait()
+        highReq.Wait()
+
+def printEverythingInOrder(gFull, rank, size, comm, ghostLow, ghostHigh):
+    for i in range(size):
+        comm.Barrier()
+        if i == rank:
+            print 'rank %s: %s %s' % (rank, ghostLow, ghostHigh)
+            print gFull
+
+def collectFullLiveArray(gFull, rank, size, comm, yBlk, ghostLow, ghostHigh):
+    yTot, xTot = totSzTpl
+    offset = 1 if ghostLow else 0
+    if rank == 0:
+        reqList = []
+        gAll = np.zeros(totSzTpl)
+        gAll[0:yBlk,:] = gFull[offset:offset+yBlk,:]
+        for otherRank in range(1, size):
+            otherYBlk = (yTot - otherRank*yBlk if otherRank == size-1
+                         else yBlk)
+            otherOffset = otherRank*yBlk
+            req = comm.Irecv(gAll[otherOffset:otherOffset+otherYBlk,:],
+                             otherRank, 3)
+            reqList.append(req)
+        for req in reqList:
+            req.Wait()
+    else:
+        req = comm.Isend(gFull[offset:offset+yBlk,:], 0, 3)
+        req.Wait()
+        gAll = None
         
+    return gAll
 
 def main():
     comm = MPI.COMM_WORLD
@@ -90,22 +119,23 @@ def main():
             gFull = np.zeros([yBlk, xTot])
             gFull[:,:] = gLive
             
-    for i in range(size):
-        comm.Barrier()
-        if i == rank:
-            print rank, yBlk, yOff, yTot, ghostLow, ghostHigh
-            print gLive
-            print gFull
-            
-#     writeBOV(gOld)
+    printEverythingInOrder(gFull, rank, size, comm,
+                           ghostLow, ghostHigh)
+    comm.Barrier()
+    gAll = collectFullLiveArray(gFull, rank, size, comm, yBlk,
+                                ghostLow, ghostHigh)
+    if rank == 0:
+        writeBOV(gAll)
+    comm.Barrier()
+
+    # writeBOV(collectFullLiveArray(gFull, rank, size, comm,
+    #                               yBlk, ghostLow, ghostHigh))
 
     for n in xrange(20000):  # @UnusedVariable
         lowReq, highReq = sendGhosts(gFull, ghostLow, ghostHigh, rank, comm)
         recvGhosts(gFull, ghostLow, ghostHigh, rank, comm)
         waitGhosts(ghostLow, ghostHigh, lowReq, highReq)
         gFull = update(gFull)
-#         if (n + 1) % 100 == 0:
-#             writeBOV(gFull)
 
     for i in range(size):
         comm.Barrier()
