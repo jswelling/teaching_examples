@@ -45,7 +45,7 @@ def sendGhosts(gFull, ghostLow, ghostHigh, rank, comm):
         # Use Isend to send the rank one below ours the
         # row it needs.  Keep the request object.
         theirGhostRowIdx = 1
-        lowReq = comm.Isend(gFull[theirGhostRowIdx,:], rank-1, 7)
+        lowReq = None  # FIX ME
     else:
         # There is no rank one below ours
         lowReq = None
@@ -53,7 +53,7 @@ def sendGhosts(gFull, ghostLow, ghostHigh, rank, comm):
         # Use Isend to send the rank one above ours the
         # row it needs.  Keep the request object.
         theirGhostRowIdx = -2
-        highReq = comm.Isend(gFull[theirGhostRowIdx,:], rank+1, 8)
+        highReq = None  # FIX ME
     else:
         highReq = None
     # Return both request objects
@@ -65,23 +65,21 @@ def recvGhosts(gFull, ghostLow, ghostHigh, rank, comm):
         # rank below ours. It's OK to immediately wait on
         # the request object.
         myGhostRowIdx = 0
-        lowRcvReq = comm.Irecv(gFull[myGhostRowIdx,:],rank-1, 8)
-        lowRcvReq.Wait()
+        pass  # FIX ME
     if ghostHigh:
         # Use Irecv to accept the ghost row sent from the
         # rank above ours.  It's OK to immediately wait on
         # the request object.
         myGhostRowIdx = -1
-        highRcvReq = comm.Irecv(gFull[myGhostRowIdx,:], rank+1, 7)
-        highRcvReq.Wait()
+        pass  # FIX ME
 
 def waitGhosts(ghostLow, ghostHigh, lowReq, highReq):
     if ghostLow:
         # Wait for the low send to complete
-        lowReq.Wait()
+        pass  # FIX ME
     if ghostHigh:
         # Wait for the high send to complete
-        highReq.Wait()
+        pass  # FIX ME
 
 def printEverythingInOrder(gFull, rank, size, comm, ghostLow, ghostHigh):
     """This is a Python version of the printing loop we saw in C"""
@@ -108,16 +106,14 @@ def collectFullLiveArray(gFull, rank, size, comm, yBlk, ghostLow, ghostHigh):
             otherOffset = otherRank*yBlk
             # Use Irecv to accept the incoming block, storing it in
             # the correct place in gAll.  Save the request in reqList.
-            req = comm.Irecv(gAll[otherOffset:otherOffset+otherYBlk,:],
-                             otherRank, myTag)
+            req = None  # FIX ME
             reqList.append(req)
         # Wait on all the requests in reqList.
         for req in reqList:
-            req.Wait()
+            pass  # FIX ME
     else:
         # Send this rank's block to rank 0.
-        req = comm.Isend(gFull[offset:offset+yBlk,:], 0, myTag)
-        req.Wait()
+        pass  # FIX ME
         gAll = None
         
     return gAll
