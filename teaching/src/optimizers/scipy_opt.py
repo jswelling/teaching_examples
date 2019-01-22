@@ -7,6 +7,7 @@ Created on Jan 18, 2016
 '''
 import numpy as np
 import scipy.optimize as op
+import matplotlib.pyplot as plt
 import writecurve
 
 pathList = []
@@ -72,6 +73,12 @@ def main():
     print result.x
     writecurve.writeCurve(method, [(x, y) for x, y, z in pathList])  # @UnusedVariable
 
+    # The following bit plots the solution
+    plt.plot(xVals, sampVals, '.')
+    xLine = np.array([0.0, 1.0])
+    plt.plot(xLine, vecFun(result.x, xLine), '-')
+    plt.show()
+    
     # The following bit of code samples and saves a grid of chisquared values
 #     grid = sampleGrid(xVals, sampVals)
 #     import writebov
