@@ -10,6 +10,9 @@ Created on Jan 10, 2016
 # In mat[a,b], a is the row and b is the column.
 ################
 
+from __future__ import print_function
+
+import sys
 import numpy as np
 from writebov import writeBOV
 from mpi4py import MPI
@@ -86,8 +89,9 @@ def printEverythingInOrder(gFull, rank, size, comm, ghostLow, ghostHigh):
     for i in range(size):
         comm.Barrier()
         if i == rank:
-            print 'rank %s: %s %s' % (rank, ghostLow, ghostHigh)
-            print gFull
+            print('rank %s: %s %s' % (rank, ghostLow, ghostHigh))
+            print(gFull)
+            sys.stdout.flush()
 
 def collectFullLiveArray(gFull, rank, size, comm, yBlk, ghostLow, ghostHigh):
     yTot, xTot = totSzTpl
@@ -123,7 +127,7 @@ def main():
     size = comm.Get_size()
     rank = comm.Get_rank()
     yTot, xTot = totSzTpl
-    yBlk = yTot/size
+    yBlk = yTot//size
     yOff = rank * yBlk
     if rank == size - 1:
         yBlk = yTot - yOff
@@ -159,7 +163,7 @@ def main():
     # writeBOV(collectFullLiveArray(gFull, rank, size, comm,
     #                               yBlk, ghostLow, ghostHigh))
 
-    for n in xrange(20000):  # @UnusedVariable
+    for n in range(20000):  # @UnusedVariable
         lowReq, highReq = sendGhosts(gFull, ghostLow, ghostHigh, rank, comm)
         recvGhosts(gFull, ghostLow, ghostHigh, rank, comm)
         waitGhosts(ghostLow, ghostHigh, lowReq, highReq)
