@@ -3,6 +3,7 @@ import sys
 import os
 import math
 import random
+import matplotlib.pyplot as plt
 
 mutatorSigma= 0.5
 initialX= 30.0
@@ -48,22 +49,18 @@ def mutate(oldX,oldF):
         else:
             return (x,oldF)
 
-gnuplotScriptString= """
-set terminal png
-set output "frames/frame_%03d.png"
-plot "tmp.ascii" with boxes
-quit
-"""
-
+frame_num=0
 def makeFrame(num,scale):
     global histo
-    ofile= open("tmp.ascii","w")
-    for i in range(0,histoBins):
-        ofile.write("%f %f\n"%(histoBinLoc(i),scale*histo[i]))
-    ofile.close()
-    pipe= os.popen("gnuplot","w")
-    pipe.write(gnuplotScriptString%num)
-    pipe.close()
+    global frame_num
+    counts = [histo[i] for i in range(histoBins)]
+    locs = [histoBinLoc(i) for i in range(histoBins)]
+    
+    plt.figure()
+    plt.bar(locs, counts)
+    plt.savefig('frame_%04d.png'%frame_num)
+    plt.close()
+    frame_num += 1
     print("wrote frame %d"%num)
 
 ##########
@@ -91,7 +88,6 @@ for i in range(0,trialCount):
     sum += integrand(x)
     if i%100 == 0: makeFrame(i/100,1.0/float(i+1))
     (x,f)= mutate(x,f)
-
 
 print("%d trials, %d accepted: %f"%(trialCount,acceptCount,sum/trialCount))
 
