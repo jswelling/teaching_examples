@@ -7,27 +7,51 @@ Created on April 23 2021
 '''
 
 import numpy as np
-from layout import Layout
+from pathlib import Path
 
+PTS_INDEX_FNAME = 'point3d_index.visit'  # Name for the index file for all Point3D data
 COUNTER = 0  # counts calls across time
-LAYOUT = None  # information about the layout
-LLC_TUPLE = None  # global lower left corner x, y, z
-TRB_TUPLE = None  # top right back corner x, y, z
+PTS_COUNTER = 0  # like COUNTER but for point3D files
+NRANKS = None  # total ranks
+RANK = None  # this rank
+GBL_SHAPE = None  # global array shape
+LCL_SHAPE = None  # local array shape
+GBL_LLC_TUPLE = None  # global lower left corner x, y, z
+GBL_TRB_TUPLE = None  # top right back corner x, y, z
 
 
-def initBOV(nranks, gbl_shape, bricklet_shape, gbl_llfc_xyz, gbl_trbc_xyz):
+def initBOVAndPoint3D(rank, nranks, gbl_shape, lcl_shape, gbl_llfc_xyz, gbl_trbc_xyz):
     """
+    This routine initializes the number of ranks and layout, and resets the time step counters
+    to zero.  Note that it will delete the .visit file which connects and Point3D outputs!
+    
     The layout here assumes that rank 0 will include llfc (the lower left front corner)
-    and rank (nranks-1) will include trbc (the top right back corner)
+    and rank (nranks-1) will include trbc (the top right back corner).
     """
     global COUNTER
-    global LAYOUT
-    global LLC_TUPLE
-    global TRB_TUPLE
-    LAYOUT = Layout(nranks, bricklet_shape, gbl_shape)
-    LLC_TUPLE = tuple(gbl_llfc_xyz)
-    TRB_TUPLE = tuple(gbl_trbc_xyz)
+    global PTS_COUNTER
+    global NRANKS
+    global RANK
+    global GBL_SHAPE
+    global LCL_SHAPE
+    global GBL_LLC_TUPLE
+    global GBL_TRB_TUPLE
+
+    RANK = rank
+    NRANKS = nranks
+    GBL_SHAPE = gbl_shape
+    LCL_SHAPE = lcl_shape
+    GBL_LLC_TUPLE = tuple(gbl_llfc_xyz)
+    GBL_TRB_TUPLE = tuple(gbl_trbc_xyz)
     COUNTER = 0
+    PTS_COUNTER = 0
+
+    # Clear out the .visit file for Point3D if it exists
+    if rank == 0:
+        index_path = Path(PTS_INDEX_FNAME)
+        if index_path.exists():
+            index_path.unlink()
+        index_path.write_text(f'!NBLOCKS {nranks}\n')
 
 
 def writeBOV(rank, g):
@@ -41,9 +65,9 @@ def writeBOV(rank, g):
         with open(bovNm, 'w') as f:
             f.write('TIME: %g\n' % float(COUNTER))
             f.write('DATA_FILE: %s\n' % dataNmProto)
-            assert g.shape == LAYOUT.shape, f"array passed in rank {rank} has the wrong shape"
-            f.write('DATA_SIZE: %d %d %d\n' % LAYOUT.gbl_shape)
-            f.write('DATA_BRICKLETS: %d %d %d\n' % g.shape)
+            assert g.shape == LCL_SHAPE, f"array passed in rank {rank} has the wrong shape"
+            f.write('DATA_SIZE: %d %d %d\n' % GBL_SHAPE)
+            f.write('DATA_BRICKLETS: %d %d %d\n' % LCL_SHAPE)
             if g.dtype == np.float64:
                 f.write('DATA_FORMAT: DOUBLE\n')
             elif g.dtype == np.int32:
@@ -53,32 +77,35 @@ def writeBOV(rank, g):
             f.write('VARIABLE: U\n')
             f.write('DATA_ENDIAN: LITTLE\n')
             f.write('CENTERING: ZONAL\n')
-            llf_x, llf_y, llf_z = LLC_TUPLE
-            trb_x, trb_y, trb_z = TRB_TUPLE
+            llf_x, llf_y, llf_z = GBL_LLC_TUPLE
+            trb_x, trb_y, trb_z = GBL_TRB_TUPLE
             f.write(f'BRICK_ORIGIN: {llf_x} {llf_y} {llf_z}\n')
             f.write(f'BRICK_SIZE: {trb_x - llf_x} {trb_y - llf_y} {trb_z - llf_z}\n')
     with open(dataNm, 'w') as f:
         g.T.tofile(f)  # BOV format expects Fortran order
 
-from mpi4py import MPI
-def main():
+
+def writePoint3D(rank, points_array):
     """
-    This is a test routine for writeBov
+    points_array is expected to be an (N,3) or (N,4) array of floats.  For each of the N points,
+    the X, Y, and Z coordinates should appear in that order, followed by an optional value
     """
-    comm = MPI.COMM_WORLD
-    size = comm.Get_size()
-    rank = comm.Get_rank()
-    gbl_shape = (128, 128, 128)
-    gbl_llf = (-0.5, -0.5, -0.5)
-    gbl_trb = (0.5, 0.5, 0.5)
-    print(f"Hello from {rank} of {size}")
-    assert gbl_shape[0] % size == 0, "128 must be divisible by the number of ranks"
-    lcl_shape = (gbl_shape[0]//size, gbl_shape[1], gbl_shape[2])
-    initBOV(size, gbl_shape, lcl_shape, gbl_llf, gbl_trb)
-    print(f"{rank} init complete")
-    g = np.zeros(lcl_shape)
-    g[:,:,:] = rank
-    writeBOV(rank, g)
-    
-if __name__ == "__main__":
-    main()
+    global PTS_COUNTER
+    dataNm = 'file_%03d-%d.3D' % (PTS_COUNTER, rank)
+    assert len(points_array.shape) == 2, 'points_array has the wrong shape'
+    nsamps, ndim = points_array.shape
+    assert ndim in [3, 4], 'there should be X, Y, Z or X, Y, Z, value entries for each point'
+    with open(dataNm, 'w') as f:
+        f.write('x y z value\n')
+        for row in range(nsamps):
+            val = points_array[row, 3] if ndim == 4 else 0.0
+            f.write(f'{points_array[row, 0]} {points_array[row,1]} {points_array[row,2]} {val}\n')
+
+    if rank == 0:    
+        with open(PTS_INDEX_FNAME, 'a') as f:
+            f.write(f'!TIME {float(PTS_COUNTER)}\n')
+            for row in range(NRANKS):
+                rowDataNm = 'file_%03d-%d.3D' % (PTS_COUNTER, row)
+                f.write(f'{rowDataNm}\n')
+
+    PTS_COUNTER += 1
