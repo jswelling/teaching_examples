@@ -21,8 +21,8 @@ def update(gOld, gNew):
     gNew[-1, :] = gOld[-1, :]
     gNew[:, 0] = gOld[:, 0]
     gNew[:, -1] = gOld[:, -1]
-    for i in xrange(1, gOld.shape[0] - 1):
-        for j in xrange(1, gOld.shape[1] - 1):
+    for i in range(1, gOld.shape[0] - 1):
+        for j in range(1, gOld.shape[1] - 1):
             gNew[i, j] = 0.25 * (gOld[i - 1, j] + gOld[i + 1, j]
                                  + gOld[i, j - 1] + gOld[i, j + 1])
     np.copyto(gOld, gNew)
@@ -33,9 +33,9 @@ def main():
     gNew = np.zeros_like(gOld)
 #     writeBOV(gOld)
 
-    for n in xrange(20000):  # @UnusedVariable
+    for n in range(20000):  # @UnusedVariable
         update(gOld, gNew)
-    print gOld
+    print(gOld)
 #         writeBOV(gOld)
 
 if __name__ == '__main__':

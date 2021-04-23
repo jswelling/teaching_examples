@@ -53,11 +53,11 @@ def update(gOld):
 def main():
     gOld = initialize(90, 110)
 
-    for n in xrange(20000):  # @UnusedVariable
+    for n in range(20000):  # @UnusedVariable
         gOld = update(gOld)
 #         if (n + 1) % 100 == 0:
 #             writeBOV(gOld)
-    print gOld
+    print(gOld)
 
 if __name__ == '__main__':
     main()

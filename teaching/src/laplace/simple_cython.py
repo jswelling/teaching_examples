@@ -24,9 +24,9 @@ def main():
     gNew = np.zeros_like(gOld)
 #     writeBOV(gOld)
 
-    for n in xrange(20000):  # @UnusedVariable
+    for n in range(20000):  # @UnusedVariable
         simple_cython_update.update(gOld, gNew)
-    print gOld
+    print(gOld)
 #         writeBOV(gOld)
 
 if __name__ == '__main__':
