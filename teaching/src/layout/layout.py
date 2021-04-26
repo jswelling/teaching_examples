@@ -1,3 +1,5 @@
+import numpy as np
+
 class Layout:
     def __init__(self, nranks, shape, gbl_shape):
         self.shape = shape
@@ -19,39 +21,33 @@ class Layout:
         """
         Returns a tuple (rank, (lcl_indices)) giving the rank and local indices of the given global location
         """
-        rank_offsets = []
-        block_offsets = []
-        for dim, (gbl_index, ranks_this_edge, edge) in enumerate(zip(gbl_indices, self.ranks_per_edge, self.shape)):
-            assert gbl_index >= 0, f'cannot map negative index {gbl_index}'
-            rank = gbl_index // edge
-            assert rank < ranks_this_edge, f'index {gbl_index} is out of range for dimension {dim}'
-            offset = gbl_index - (rank * edge)
-            rank_offsets.append(rank)
-            block_offsets.append(offset)
-        #print(rank_offsets, block_offsets)
-        gbl_rank = 0
-        scale = 1
-        for rank, ranks_this_edge in zip(reversed(rank_offsets), reversed(self.ranks_per_edge)):
-            gbl_rank += rank * scale
-            scale *= ranks_this_edge
-            #print(rank, ranks_this_edge, gbl_rank, scale)
-        return gbl_rank, tuple(block_offsets)
+        gbl_indices = gbl_indices % np.array(self.gbl_shape)  # wrap everything back to the actual range
+        gbl_offset = np.ravel_multi_index(gbl_indices, self.gbl_shape)
+        long_shape = np.array([pair for pair in zip(self.ranks_per_edge, self.shape)]).flatten()
+        long_indices = np.unravel_index(gbl_offset, long_shape)
+        long_index_array = np.array(long_indices).reshape((-1,2))
+        #print('long_index_array follows')
+        #print(long_index_array)
+        gbl_rank = np.ravel_multi_index(long_index_array[:, 0], self.ranks_per_edge)
+        return gbl_rank, long_index_array[:, 1]
     def lcl_to_gbl(self, this_rank, indices):
-        gbl_rank = 0
-        rank_remainder = this_rank
-        rank_offsets = []
-        for dim, ranks_this_edge in enumerate(reversed(self.ranks_per_edge)):
-            #print(f'{rank_remainder} ->')
-            this_offset = rank_remainder % ranks_this_edge
-            rank_remainder //= ranks_this_edge
-            rank_offsets.append(this_offset)
-            #print(dim, ranks_this_edge, this_offset, rank_remainder)
-        rank_offsets = reversed(rank_offsets)
-        #print([r for r in rank_offsets])  # or else we just print the iterator object
-        gbl_indices = []
-        #print('-------------------')
-        for this_offset, this_index, edge in zip(rank_offsets, indices, self.shape):
-            gbl_indices.append(this_offset * edge + this_index)
-            #print(f'{this_offset}, {this_index}, {edge} -> gbl_indices[-1]')
-        #print(gbl_indices)
-        return(gbl_indices)
+        rank_offsets = np.unravel_index(this_rank, self.ranks_per_edge)
+        return(rank_offsets * np.array(self.shape) + np.array(indices))
+    def get_rank_indices(self, this_rank):
+        return np.unravel_index(this_rank, self.ranks_per_edge)
+    def fill_with_gbl_addr(self, rank, target):
+        assert target.shape == self.shape, 'target of fill_with_global_address is the wrong shape'
+        assert rank in range(self.nranks), 'rank is out of range'
+        assert len(self.shape) == 3, "This routine only supports 3D local arrays"
+        for i in range(self.shape[0]):
+            for j in range(self.shape[1]):
+                #print(i,j)
+                index_l = [(i, j, k) for k in range(self.shape[2])]
+                #print(index_l)
+                gbl_idx_l = self.lcl_to_gbl(rank, index_l)
+                #print(gbl_idx_l)
+                gbl_addr_l = np.ravel_multi_index(gbl_idx_l.T, self.gbl_shape)
+                #print(gbl_addr_l)
+                target[i, j, :] = np.array(gbl_addr_l)
+                #print('done')
+        return target
