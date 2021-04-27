@@ -30,11 +30,11 @@ class Layout:
         #print(long_index_array)
         gbl_rank = np.ravel_multi_index(long_index_array[:, 0], self.ranks_per_edge)
         return gbl_rank, long_index_array[:, 1]
-    def lcl_to_gbl(self, this_rank, indices):
-        rank_offsets = np.unravel_index(this_rank, self.ranks_per_edge)
-        return(rank_offsets * np.array(self.shape) + np.array(indices))
     def get_rank_indices(self, this_rank):
         return np.unravel_index(this_rank, self.ranks_per_edge)
+    def lcl_to_gbl(self, this_rank, indices):
+        rank_offsets = self.get_rank_indices(this_rank)
+        return(rank_offsets * np.array(self.shape) + np.array(indices))
     def fill_with_gbl_addr(self, rank, target):
         assert target.shape == self.shape, 'target of fill_with_global_address is the wrong shape'
         assert rank in range(self.nranks), 'rank is out of range'

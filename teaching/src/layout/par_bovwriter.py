@@ -22,6 +22,12 @@ class BOVWriter:
         self.counter = 0
         self.pts_counter = 0
 
+        # BOV file block numbering differs from the 'ravel' numbering used by numpy.
+        layout = (np.array(gbl_shape) // np.array(lcl_shape))
+        assert np.prod(layout) == nranks, "Number of ranks is inconsistent with shape ratio?"
+        layout_indices = np.array(np.unravel_index(rank, layout))
+        self.bov_rank = np.ravel_multi_index(np.flip(layout_indices, 0), np.flip(layout, 0))
+
         # Clear out the .visit file for Point3D if it exists
         if rank == 0:
             index_path = Path(self.get_pts_index_fname())
@@ -42,7 +48,7 @@ class BOVWriter:
     def writeBOV(self, g):
         assert g.shape == self.lcl_shape, f"array passed in rank {self.rank} has the wrong shape"
         bovNm = '%s_%03d.bov' % (self.base_name, self.counter)
-        dataNm = '%s_%03d-%d.data' % (self.base_name, self.counter, self.rank)
+        dataNm = '%s_%03d-%d.data' % (self.base_name, self.counter, self.bov_rank)
         dataNmProto = '%s_%03d-%%d.data' % (self.base_name, self.counter)
         self.counter += 1
         if self.rank == 0:

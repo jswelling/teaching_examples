@@ -16,6 +16,43 @@ def get_corners(rank, layout, llf, trb):
     my_trb = my_llf + deltas
     return my_llf, my_trb
 
+
+def shuffle_and_swap(comm, sendbuf, before_layout, after_layout):
+    """
+    This reordering and transmission pattern is really customized for the XY-plane-to-Z-pencil
+    layout pattern.
+    """
+    # Shuffle our data by adding indices and permuting so that all cells destined for the same
+    # destination rank are sequential.
+    before_nx, before_ny, before_nz = before_layout.shape
+    after_nx, after_ny, after_nz = after_layout.shape
+    assert before_layout.nranks == after_layout.nranks, "Different numbers of ranks before and after swap?"
+    assert after_nz / before_nz == before_layout.nranks, ("The before layout rank does not contribute to"
+                                                          " all after-layout ranks")
+    assert (before_nx // after_nx) * (before_ny // after_ny) == after_layout.nranks, "shape mismatch?"
+    assert sendbuf.shape == before_layout.shape, "send buffer is the wrong shape?"
+    sendbuf = sendbuf.reshape((before_nx // after_nx, after_nx, before_ny // after_ny, after_ny, before_nz))
+    sendbuf = np.transpose(sendbuf, axes=[0, 2, 1, 3, 4])
+    # two reshaping steps for clarity, even though we could accomplish the same with only one
+    sendbuf = sendbuf.reshape(before_nx // after_nx, before_ny // after_ny, -1)
+    sendbuf = sendbuf.reshape(after_layout.nranks, -1)
+
+    # Actually swap the data.  After the alltoall, rcvbuf will contain regions from all ranks
+    # of the input data array.
+    rcvbuf = np.empty_like(sendbuf)
+    comm.Alltoall(sendbuf, rcvbuf)
+
+    # At this point all the data expected for the 'after' layout is present in rcvbuf, but it
+    # is not in the right order.  It arrived with the lowest src rank in the buffer before the
+    # next lowest src rank, and that is not what we want.
+    rcvbuf = rcvbuf.reshape(after_layout.nranks,
+                            after_nx, after_ny,
+                            after_nz // after_layout.nranks)
+    rcvbuf = np.transpose(rcvbuf, [1, 2, 0, 3])
+    rcvbuf = rcvbuf.reshape(after_nx, after_ny, after_nz)
+    return rcvbuf
+
+
 def main():
     """
     This is a demonstration of global shuffling
@@ -33,10 +70,12 @@ def main():
     rank = comm.Get_rank()
 
     # We are going to write two sets of BOV files
-    before_writer = BOVWriter('before', 'before', rank, nranks, before_layout.gbl_shape, before_layout.shape,
-                              GBL_LLF, GBL_TRB)
-    after_writer = BOVWriter('after', 'after', rank, nranks, after_layout.gbl_shape, after_layout.shape,
-                              GBL_LLF, GBL_TRB)
+    sent_writer = BOVWriter('sent', 'sent', rank, nranks, before_layout.gbl_shape, before_layout.shape,
+                            GBL_LLF, GBL_TRB)
+    received_writer = BOVWriter('received', 'received', rank, nranks, after_layout.gbl_shape, after_layout.shape,
+                                GBL_LLF, GBL_TRB)
+    expected_writer = BOVWriter('expected', 'expected', rank, nranks, after_layout.gbl_shape, after_layout.shape,
+                                GBL_LLF, GBL_TRB)
                               
     # Figure out where this rank is in space, grid-wise and spatially
     before_rank_indices = before_layout.get_rank_indices(rank)
@@ -48,77 +87,98 @@ def main():
     after_lcl_llf, after_lcl_trb = get_corners(rank, after_layout, GBL_LLF, GBL_TRB)
     print(f'{rank}: corners after shuffle: {after_lcl_llf} {after_lcl_trb}')
 
-    # Save bov files containing our rank before and after.
-    data = np.zeros(before_layout.shape, dtype=np.int32)
-    data[:,:,:] = rank
-    before_writer.writeBOV(data)
-    data = np.zeros(after_layout.shape, dtype=np.int32)
-    data[:,:,:] = rank
-    after_writer.writeBOV(data)
+    # First test: all senders send their own rank.  Do the results go to the right place?
+    sendbuf = np.zeros(before_layout.shape, dtype=np.int32)
+    sendbuf[:,:,:] = rank
+    sent_writer.writeBOV(sendbuf)
+    # Perform the swap, and verify that everything ended up on the correct rank
+    rcvbuf = shuffle_and_swap(comm, sendbuf, before_layout, after_layout)
+    received_writer.writeBOV(rcvbuf)
+    expected = np.empty(after_layout.shape, dtype=np.int32)
+    for i in range(after_layout.shape[0]):
+        for j in range(after_layout.shape[1]):
+            for k in range(after_layout.shape[2]):
+                gbl_idx = after_layout.lcl_to_gbl(rank, (i,j,k))
+                before_rank, before_idx = before_layout.gbl_to_lcl(gbl_idx)
+                expected[i,j,k] = before_rank
+    print(f'{rank}: done building comparison rank array')
+    expected_writer.writeBOV(expected)
+    if np.all(rcvbuf == expected):
+        print(f'{rank}: source-side rank comparison succeeded')
+    else:
+        print(f'{rank}: source-side rank comparison failed')
+
+    # Second test: for X, Y, and Z in turn, have each sender send the global index of
+    # each cell.
+    for axis, axisname in enumerate("XYZ"):
+        sendbuf = np.empty(before_layout.shape, dtype=np.int32)
+        for i in range(before_layout.shape[0]):
+            for j in range(before_layout.shape[1]):
+                for k in range(before_layout.shape[2]):
+                    gbl_idx = before_layout.lcl_to_gbl(rank, (i, j, k))
+                    sendbuf[i, j, k] = gbl_idx[axis]
+        expected = np.empty(after_layout.shape, dtype=np.int32)
+        for i in range(after_layout.shape[0]):
+            for j in range(after_layout.shape[1]):
+                for k in range(after_layout.shape[2]):
+                    gbl_idx = after_layout.lcl_to_gbl(rank, (i, j, k))
+                    expected[i, j, k] = gbl_idx[axis]
+        rcvbuf = shuffle_and_swap(comm, sendbuf, before_layout, after_layout)
+        sent_writer.writeBOV(sendbuf)
+        received_writer.writeBOV(rcvbuf)
+        expected_writer.writeBOV(expected)
+        if np.all(rcvbuf == expected):
+            print(f'{rank}: index {axisname} comparison succeeded')
+        else:
+            print(f'{rank}: index {axisname} comparison failed')
+        
+    sys.exit('done')
+            
+    # Make an array where each cell contains the rank that was associated with that location before
+    # the shuffle.
+    sendbuf = np.empty(before_layout.shape, dtype=np.int32)
+    sendbuf[:,:,:] = rank
+
+    sendbuf = np.zeros(after_layout.shape, dtype=np.int32)
+    sendbuf[:,:,:] = rank
+    after_writer.writeBOV(sendbuf)
 
     # Make an array where each cell contains the rank that will be associated with that location after
     # the shuffle.
-    data = np.zeros(before_layout.shape, dtype=np.int32)
+    sendbuf = np.zeros(before_layout.shape, dtype=np.int32)
     for i in range(before_layout.shape[0]):
         for j in range(before_layout.shape[1]):
             for k in range(before_layout.shape[2]):
                 gbl_idx = before_layout.lcl_to_gbl(rank, (i,j,k))
                 after_rank, after_idx = after_layout.gbl_to_lcl(gbl_idx)
-                data[i,j,k] = after_rank
-    print(f'{rank}: done building!')
-    before_writer.writeBOV(data)  # This should look like the output of after_writer above
+                sendbuf[i,j,k] = after_rank
+    print(f'{rank}: done building destination rank array')
+    before_writer.writeBOV(sendbuf)  # This should look like the output of after_writer above
 
-    # Shuffle our data by adding indices and permuting so that all cells destined for the same
-    # destination rank are sequential.
-    data = data.reshape((2, 64, 4, 32, 16))
-    data = np.transpose(data, axes=[0, 2, 1, 3, 4])
-    print(data.shape)
-    data = data.reshape(2, 4, 32*64*16)
-    dest_rank = 0
-    for i in range(2):
-        for j in range(4):
-            #print(f'({i}, {j}): {data[i,j,:]}')
-            #print(f'({i}, {j}): {data[i,31,j,31,:]}')
-            if not np.all(data[i, j, :] == dest_rank):
-                print(f'{rank}: Nope on {dest_rank}')
-            dest_rank += 1
+
+    after_writer.writeBOV(for_comparison)  # This should look like the output of before_writer above
+
+    # Perform the swap, and verify that everything ended up on the correct rank
+    rcvbuf = shuffle_and_swap(comm, sendbuf, before_layout, after_layout)
+    if np.all(rcvbuf[:,:] == for_comparison[:,:]):
+        print(f'{rank}: sender rank comparison succeeded')
+    else:
+        print(f'{rank}: sender rank comparison failed :-(')
+    after_writer.writeBOV(rcvbuf)
+
+    # Use a feature in the Layout class that uniquely numbers each cell, and make sure all of the cells
+    # end up where expected
+    sendbuf = np.zeros(before_layout.shape, dtype=np.int32)
+    sendbuf = before_layout.fill_with_gbl_addr(rank, sendbuf)
+    print(f'{rank}: done building global address array')
+    rcvbuf = shuffle_and_swap(comm, sendbuf, before_layout, after_layout)
+    for_comparison = np.empty(after_layout.shape, dtype=np.int32)
+    for_comparison = after_layout.fill_with_gbl_addr(rank, for_comparison)
+    if np.all(rcvbuf == for_comparison):
+        print(f'{rank}: Global address comparison succeeded')
+    else:
+        print(f'{rank}: Global address comparison failed :-(')
     
-    # The following reshape had better work, or there is not a match between the number of
-    # communicating ranks and the number of data blocks- which means we picked inappropriate
-    # layouts
-    data = data.reshape(nranks, -1)
-
-    # Actually swap the data.  After the alltoall, rcvbuf will contain regions from all ranks
-    # of the input data array.
-    rcvbuf = np.empty_like(data)
-    comm.Alltoall(data, rcvbuf)
-    if not np.all(rcvbuf[:,:] == rank):
-        print(f'{rank}: Nope on recv')
-
-    # And restore the shape of rcvbuf
-    rcvbuf = rcvbuf.reshape(32, 63, 128)
-
-            
-    sys.exit('done')
-    gbl_size = gbl_trb - gbl_llf
-    lcl_size = gbl_size / np.array((float(nranks), 1.0, 1.0))
-    rank_shift = np.array((lcl_size[0], 0.0, 0.0))
-    lcl_llf = gbl_llf + rank * rank_shift
-    lcl_trb = lcl_llf + lcl_size
-    print(f'rank {rank} gbl_size: {gbl_size}  lcl_size: {lcl_size}  local corners: {lcl_llf}, {lcl_trb}')
-
-    # Each rank contributes to sample dataset with regions colored by rank
-    g = np.zeros(lcl_shape)
-    g[:,:,:] = rank
-    writeBOV(rank, g)
-    
-    # Each rank contributes a group of points located randomly within
-    # its volume, colored by rank
-    npts = 10
-    pts = lcl_llf + np.random.random((npts, 3)) * lcl_size
-    rank_column = np.array(npts * [[rank]])
-    pts = np.append(pts, rank_column, axis=1)
-    writePoint3D(rank, pts)
     
 if __name__ == "__main__":
     main()
