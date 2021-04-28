@@ -1,3 +1,12 @@
+#! /usr/bin/env python
+
+"""
+This sample program demonstrates and tests swapping data between ranks in the pattern appropriate for 
+X-Y slabs swapping with Z pencils.  Run it like:
+
+    mpirun -n 8 python shuffle_demo.py
+"""
+
 import sys
 import numpy as np
 from mpi4py import MPI
@@ -19,7 +28,7 @@ def get_corners(rank, layout, llf, trb):
 
 def shuffle_and_swap(comm, sendbuf, before_layout, after_layout):
     """
-    This reordering and transmission pattern is really customized for the XY-plane-to-Z-pencil
+    This reordering and transmission pattern is customized for the XY-plane-to-Z-pencil
     layout pattern.
     """
     # Shuffle our data by adding indices and permuting so that all cells destined for the same
@@ -53,6 +62,38 @@ def shuffle_and_swap(comm, sendbuf, before_layout, after_layout):
     return rcvbuf
 
 
+def reverse_shuffle_and_swap(comm, sendbuf, before_layout, after_layout):
+    """
+    This reordering and transmission pattern is customized for the Z-pencil-to-XY-plane
+    layout pattern.
+    """
+    # Shuffle our data by adding indices and permuting so that all cells destined for the same
+    # destination rank are sequential.
+    before_nx, before_ny, before_nz = before_layout.shape  # the pencil layout
+    after_nx, after_ny, after_nz = after_layout.shape  # the slab layout
+    assert before_layout.nranks == after_layout.nranks, "Different numbers of ranks before and after swap?"
+    assert before_nz / after_nz == after_layout.nranks, ("The before layout rank does not contribute to"
+                                                          " all after-layout ranks")
+    assert (after_nx // before_nx) * (after_ny // before_ny) == before_layout.nranks, "shape mismatch?"
+    assert sendbuf.shape == before_layout.shape, "send buffer is the wrong shape?"
+    sendbuf = sendbuf.reshape((before_nx, before_ny, before_nz // after_nz, after_nz))
+    sendbuf = np.transpose(sendbuf, axes=[2, 0, 1, 3])
+    sendbuf = sendbuf.reshape(after_layout.nranks, -1)
+
+    # Actually swap the data.  After the alltoall, rcvbuf will contain regions from all ranks
+    # of the input data array.
+    rcvbuf = np.empty_like(sendbuf)
+    comm.Alltoall(sendbuf, rcvbuf)
+
+    # At this point all the data expected for the 'after' layout is present in rcvbuf, but it
+    # is not in the right order.  It arrived with the lowest src rank in the buffer before the
+    # next lowest src rank, and that is not what we want.
+    rcvbuf = rcvbuf.reshape((after_nx // before_nx, after_ny // before_ny, before_nx, before_ny, after_nz))
+    rcvbuf = np.transpose(rcvbuf, [0, 2, 1, 3, 4])
+    rcvbuf = rcvbuf.reshape(after_nx, after_ny, after_nz)
+    return rcvbuf
+
+
 def main():
     """
     This is a demonstration of global shuffling
@@ -75,6 +116,8 @@ def main():
     received_writer = BOVWriter('received', 'received', rank, nranks, after_layout.gbl_shape, after_layout.shape,
                                 GBL_LLF, GBL_TRB)
     expected_writer = BOVWriter('expected', 'expected', rank, nranks, after_layout.gbl_shape, after_layout.shape,
+                                GBL_LLF, GBL_TRB)
+    returned_writer = BOVWriter('returned', 'returned', rank, nranks, before_layout.gbl_shape, before_layout.shape,
                                 GBL_LLF, GBL_TRB)
                               
     # Figure out where this rank is in space, grid-wise and spatially
@@ -107,6 +150,12 @@ def main():
         print(f'{rank}: source-side rank comparison succeeded')
     else:
         print(f'{rank}: source-side rank comparison failed')
+    returnbuf = reverse_shuffle_and_swap(comm, rcvbuf, after_layout, before_layout)
+    if np.all(returnbuf == sendbuf):
+        print(f'{rank}: source-side rank return comparison succeeded')
+    else:
+        print(f'{rank}: source-side rank return comparison failed')
+    returned_writer.writeBOV(returnbuf)
 
     # Second test: for X, Y, and Z in turn, have each sender send the global index of
     # each cell.
@@ -131,43 +180,16 @@ def main():
             print(f'{rank}: index {axisname} comparison succeeded')
         else:
             print(f'{rank}: index {axisname} comparison failed')
+        returnbuf = reverse_shuffle_and_swap(comm, rcvbuf, after_layout, before_layout)
+        if np.all(returnbuf == sendbuf):
+            print(f'{rank}: index {axisname} return comparison succeeded')
+        else:
+            print(f'{rank}: index {axisname} return comparison failed')
+        returned_writer.writeBOV(returnbuf)
         
-    sys.exit('done')
-            
-    # Make an array where each cell contains the rank that was associated with that location before
-    # the shuffle.
-    sendbuf = np.empty(before_layout.shape, dtype=np.int32)
-    sendbuf[:,:,:] = rank
-
-    sendbuf = np.zeros(after_layout.shape, dtype=np.int32)
-    sendbuf[:,:,:] = rank
-    after_writer.writeBOV(sendbuf)
-
-    # Make an array where each cell contains the rank that will be associated with that location after
-    # the shuffle.
-    sendbuf = np.zeros(before_layout.shape, dtype=np.int32)
-    for i in range(before_layout.shape[0]):
-        for j in range(before_layout.shape[1]):
-            for k in range(before_layout.shape[2]):
-                gbl_idx = before_layout.lcl_to_gbl(rank, (i,j,k))
-                after_rank, after_idx = after_layout.gbl_to_lcl(gbl_idx)
-                sendbuf[i,j,k] = after_rank
-    print(f'{rank}: done building destination rank array')
-    before_writer.writeBOV(sendbuf)  # This should look like the output of after_writer above
-
-
-    after_writer.writeBOV(for_comparison)  # This should look like the output of before_writer above
-
-    # Perform the swap, and verify that everything ended up on the correct rank
-    rcvbuf = shuffle_and_swap(comm, sendbuf, before_layout, after_layout)
-    if np.all(rcvbuf[:,:] == for_comparison[:,:]):
-        print(f'{rank}: sender rank comparison succeeded')
-    else:
-        print(f'{rank}: sender rank comparison failed :-(')
-    after_writer.writeBOV(rcvbuf)
-
     # Use a feature in the Layout class that uniquely numbers each cell, and make sure all of the cells
-    # end up where expected
+    # end up where expected.  There's no point plotting these because the global addresses don't make
+    # much visual sense.
     sendbuf = np.zeros(before_layout.shape, dtype=np.int32)
     sendbuf = before_layout.fill_with_gbl_addr(rank, sendbuf)
     print(f'{rank}: done building global address array')
@@ -178,6 +200,11 @@ def main():
         print(f'{rank}: Global address comparison succeeded')
     else:
         print(f'{rank}: Global address comparison failed :-(')
+    returnbuf = reverse_shuffle_and_swap(comm, rcvbuf, after_layout, before_layout)
+    if np.all(returnbuf == sendbuf):
+        print(f'{rank}: Global address return comparison succeeded')
+    else:
+        print(f'{rank}: Global address return comparison failed')
     
     
 if __name__ == "__main__":
